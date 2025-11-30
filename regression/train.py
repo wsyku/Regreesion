@@ -1,5 +1,4 @@
 import argparse
-import yaml
 from RegressionTrainer import RegressionTrainer
 
 
@@ -14,11 +13,7 @@ def main():
 
     args = parser.parse_args()
 
-    # 加载配置文件
-    with open(args.config, 'r') as f:
-        config = yaml.safe_load(f)
-
-    trainer = RegressionTrainer(config, fold=args.fold, dataset=args.dataset_id)
+    trainer = RegressionTrainer(config_path=args.config, fold=args.fold, dataset=args.dataset_id)
     trainer.run()
 
 

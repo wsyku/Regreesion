@@ -7,6 +7,7 @@ class ConfigurableResNet3D(nn.Module):
     """
      参数量7,968,769
     """
+
     def __init__(
             self,
             in_channels=1,
@@ -197,83 +198,62 @@ class ResNet3D(nn.Module):
         return x
 
 
-class SimpleMLP3D(nn.Module):
+class MLP(nn.Module):
     """
-     参数量339,755,393
+    mask输入友好型MLP，支持LayerNorm/BatchNorm1d、可选残差、激活和Dropout灵活配置
     """
-    def __init__(self, in_shape=(16, 648, 256), hidden_dim=128, num_hidden=2, out_dim=1,**kwargs):
+
+    def __init__(self, input_shape, hidden_dims=[256, 128, 64], out_dim=1, activation="ReLU", dropout=False,
+                 final_activation=nn.Sigmoid, normalization=None, use_residual=False, **kwargs):
         super().__init__()
-        self.in_shape = in_shape
+        self.input_shape = input_shape
         self.flatten = nn.Flatten()
-        input_dim = in_shape[0] * in_shape[1] * in_shape[2]
-        layers = [nn.Linear(input_dim, hidden_dim), nn.ReLU(inplace=True)]
-        for _ in range(num_hidden - 1):
-            layers.append(nn.Linear(hidden_dim, hidden_dim))
-            layers.append(nn.ReLU(inplace=True))
-        layers.append(nn.Linear(hidden_dim, out_dim))
-        layers.append(nn.Sigmoid())
-        self.mlp = nn.Sequential(*layers)
-
-    def forward(self, x):
-        # x: (B, 1, D, H, W) or (B, D, H, W)
-        if x.ndim == 5:
-            x = x.squeeze(1)
-        x = self.flatten(x)
-        x = self.mlp(x)
-        return x
-
-
-class AdvancedMLP3D(nn.Module):
-    """679,518,721"""
-    def __init__(self, in_shape=(16, 648, 256), hidden_dims=[256, 128, 64], out_dim=1, activation=nn.ReLU, dropout=0.5, final_activation=nn.Sigmoid, **kwargs):
-        super().__init__()
-        self.in_shape = in_shape
-        self.flatten = nn.Flatten()
-        input_dim = in_shape[0] * in_shape[1] * in_shape[2]
+        input_dim = input_shape[0] * input_shape[1] * input_shape[2]
         dims = [input_dim] + hidden_dims
         layers = []
+        self.use_residual = use_residual
+        self.normalization = getattr(nn, normalization) if normalization else nn.Identity()
+        self.activation = getattr(nn, activation)
+        self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+
         for i in range(len(hidden_dims)):
-            layers.append(nn.Linear(dims[i], dims[i+1]))
-            layers.append(activation(inplace=True) if 'inplace' in activation.__init__.__code__.co_varnames else activation())
-            if dropout is not None and dropout > 0:
-                layers.append(nn.Dropout(dropout))
+            layers.append(nn.Linear(dims[i], dims[i + 1]))
+            layers.append(self.normalization(dims[i + 1]))
+            layers.append(self.activation(
+                inplace=True) if 'inplace' in self.activation.__init__.__code__.co_varnames else self.activation())
+            layers.append(self.dropout)
+
         layers.append(nn.Linear(hidden_dims[-1], out_dim))
-        if final_activation is not None:
-            layers.append(final_activation())
+        layers.append(final_activation()) if final_activation else None
+
         self.mlp = nn.Sequential(*layers)
 
     def forward(self, x):
-        # x: (B, 1, D, H, W) or (B, D, H, W)
+        # x: (B, 1, D, H, W) or (B, D, H, W) or (B, N)
         if x.ndim == 5:
             x = x.squeeze(1)
+        x = x.float()  # 确保mask为float
         x = self.flatten(x)
-        x = self.mlp(x)
+        if self.use_residual and len(self.mlp) > 3:
+            out = x
+            for i, layer in enumerate(self.mlp):
+                out_new = layer(out)
+                # 只在Linear+Norm+Act+Dropout后加残差
+                if self.norm_type and isinstance(layer, (nn.LayerNorm, nn.BatchNorm1d)) and i + 2 < len(self.mlp):
+                    if out_new.shape == out.shape:
+                        out = out + out_new
+                    else:
+                        out = out_new
+                else:
+                    out = out_new
+            x = out
+        else:
+            x = self.mlp(x)
         return x
-
-
 
 
 if __name__ == "__main__":
-    # # 测试模型结构
-    # model = ConfigurableResNet3D(
-    #     in_channels=1,
-    #     n_stages=4,
-    #     features_per_stage=[32, 64, 128, 256],
-    #     kernel_sizes=[[1, 3, 3], [1, 3, 3], [3, 3, 3], [3, 3, 3]],
-    #     strides=[[1, 1, 1], [1, 2, 2], [1, 2, 2], [2, 2, 2]],
-    #     conv_bias=True,
-    #     norm_op=nn.BatchNorm3d,
-    #     norm_op_kwargs={"eps": 1e-5, "affine": True},
-    #     layers=[2, 2, 2, 2]
-    # )
-    # model.to("cuda")
-    # x = torch.randn(1, 1, 16, 648, 256).to("cuda")
-    # y = model(x)
-    # # print("Output shape:", y.shape)
-    # # print(model)
-    # print_model_summary(model, input_size=(1, 16, 648, 256))
-
-    model = AdvancedMLP3D()
+    model = MLP(input_shape=(16, 648, 256))
     model.to("cuda")
     x = torch.randn(2, 1, 16, 648, 256).to("cuda")
     y = model(x)

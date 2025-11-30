@@ -1,8 +1,21 @@
-batch_size: 1
-lr: 0.001
-num_epochs: 50
-target_shape: [ 16, 648,256 ]
+trainer:
+  num_epochs: 50
+
 model:
-  name: "AdvancedMLP3D"
-  hidden_dims: [ 256, 128, 64]
+  name: "MLP"
+  hidden_dims: [128, 64]
   dropout: 0.5
+  activation: "ReLU"
+  normalization: None #BatchNorm1d(batch必须>1)
+  use_residual: False
+
+loader:
+  target_shape: [ 16, 648,256 ]
+  batch_size: 1
+
+loss:
+  name: "SmoothL1Loss"
+
+optimizer:
+  lr: 0.001
+  weight_decay: 0.00001

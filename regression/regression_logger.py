@@ -6,6 +6,8 @@ import datetime
 from batchgenerators.utilities.file_and_folder_operations import join
 import numpy as np
 import os
+import shutil
+from torch.utils.tensorboard import SummaryWriter
 
 matplotlib.use('agg')
 
@@ -17,7 +19,7 @@ class RegressionLogger(object):
     """
 
     def __init__(self, verbose: bool = False, log_to_file: bool = True, log_to_console: bool = True,
-                 log_dir: str = None):
+                 log_dir: str = None, config_path: str = None):
         self.metrics_dict = {
             'train_loss': [],
             'val_loss': [],
@@ -26,12 +28,18 @@ class RegressionLogger(object):
         }
         self.verbose = verbose
         self.log_dir = log_dir
+        self.tb_writer = SummaryWriter(log_dir=log_dir)
+        self.epoch = 0
 
         if self.log_dir:
             os.makedirs(self.log_dir, exist_ok=True)
 
         # 配置统一的日志处理器
         self._setup_logging(log_to_file, log_to_console)
+
+        # 复制配置文件到日志目录
+        if config_path :
+            shutil.copy(config_path, os.path.join(self.log_dir, os.path.basename(config_path)))
 
     def _setup_logging(self, log_to_file: bool, log_to_console: bool):
         """配置日志处理器"""
@@ -125,6 +133,11 @@ class RegressionLogger(object):
     def info(self, msg):
         self.logger.info(msg)
 
+    def log_metrics_tensorboard(self, metrics: dict, epoch: int):
+        """将指标写入TensorBoard"""
+        for k, v in metrics.items():
+            self.tb_writer.add_scalar(k, v, epoch)
+        self.tb_writer.flush()
 
 if __name__ == "__main__":
     # 测试RegressionLogger
