@@ -14,6 +14,10 @@ from torch.utils.data import DataLoader
 from preprocess import process_dataset
 
 
+#TODO 1.生成预测结果2.自定义损失函数等
+#TODO 随机种子设置
+
+
 class RegressionTrainer:
     def __init__(self, config: Dict, fold: int, dataset: int):
         self.config = config
@@ -27,6 +31,9 @@ class RegressionTrainer:
         self.weight_decay = config.get("weight_decay", 1e-5)
         self.num_epochs = config.get("num_epochs", 100)
         self.target_shape = config.get("target_shape", (16, 648, 256))
+
+        self.create_preprocessed_data()
+
         train_dataset = RegressionNpzDataset(self.dataset, self.target_shape, fold=self.fold, mode='train')
         val_dataset = RegressionNpzDataset(self.dataset, self.target_shape, fold=self.fold, mode='val')
         self.train_loader = DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True)
@@ -83,8 +90,6 @@ class RegressionTrainer:
         return avg_loss, mae
 
     def run(self):
-        # 预处理数据
-        self.create_preprocessed_data()
 
         best_val_loss = float('inf')
         try:

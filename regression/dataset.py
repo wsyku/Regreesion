@@ -1,11 +1,11 @@
 import os
 import json
+import csv
 import numpy as np
 import nibabel as nib
 from typing import List, Dict, Tuple, Optional
 from batchgenerators.utilities.file_and_folder_operations import isfile
 from paths import regression_preprocessed
-from torch.utils.data import DataLoader
 
 
 class RegressionDataset:
@@ -32,7 +32,7 @@ class RegressionDataset:
         """
         self.data_dir = data_dir
         self.images_dir = os.path.join(data_dir, "imagesTr")
-        self.labels_dir = os.path.join(data_dir, "labelsTr")
+        self.score_file = os.path.join(data_dir, "score.csv")
         self.split_json_path = os.path.join(data_dir, "splits_final.json")
         self.fold = fold
         self.mode = mode
@@ -41,7 +41,10 @@ class RegressionDataset:
 
         # 验证参数合法性
         assert os.path.isdir(self.images_dir), f"图像目录不存在: {self.images_dir}"
-        self.has_labels = os.path.isdir(self.labels_dir)
+        self.has_labels = isfile(self.score_file)
+        self.scores = None
+        if self.has_labels:
+            self.scores = self._load_scores_from_csv(self.score_file)
         if self.mode in ['train', 'val']:
             assert os.path.isfile(self.split_json_path), "训练/验证模式需split.json"
             self.identifiers = self._load_identifiers_from_split()
@@ -49,6 +52,24 @@ class RegressionDataset:
             # 推理模式，自动遍历imagesTr下所有nii.gz
             self.identifiers = [f[:-7] for f in os.listdir(self.images_dir) if f.endswith('.nii.gz')]
         self.identifiers.sort()
+
+    def _load_scores_from_csv(self, csv_path) -> dict:
+        """读取csv标签文件，返回{标识符: 分数}字典"""
+
+        scores = {}
+        with open(csv_path, 'r', encoding='utf-8') as f:
+            reader = csv.reader(f)
+            header = next(reader) # 跳过表头
+            for row in reader:
+                if len(row) < 2:
+                    continue
+                identifier, score = row[0].strip(), row[1].strip()
+                try:
+                    scores[identifier] = float(score)
+                except ValueError:
+                    continue
+        print(f"成功加载 {len(scores)} 个样本的分数")
+        return scores
 
     def _load_identifiers_from_split(self) -> List[str]:
         """从split.json读取当前折的训练/验证样本标识符"""
@@ -82,10 +103,9 @@ class RegressionDataset:
         return image_array, {"affine": affine, "spacing": spacing, "shape": image_array.shape}
 
     def _load_label(self, identifier: str) -> Optional[float]:
-        """从txt文件加载回归标签（单个数字）"""
-        label_path = os.path.join(self.labels_dir, f"{identifier}.txt")
-        if isfile(label_path):
-            return self.load_txt(label_path)
+        """从csv文件加载回归标签（单个数字）"""
+        if self.scores is not None and identifier in self.scores:
+            return self.scores[identifier]
         return None
 
     def __getitem__(self, index: int) -> Dict:
@@ -105,17 +125,6 @@ class RegressionDataset:
     def __len__(self) -> int:
         """返回样本数量"""
         return len(self.identifiers)
-
-    def get_case(self, identifier: str) -> Dict:
-        """按标识符获取样本"""
-        if identifier not in self.identifiers:
-            raise ValueError(f"标识符不在当前数据集: {identifier}")
-        return self.__getitem__(self.identifiers.index(identifier))
-
-    @staticmethod
-    def load_txt(txt_path):
-        with open(txt_path, 'r') as f:
-            return float(f.read().strip())
 
     @staticmethod
     def load_json(json_path):
@@ -154,7 +163,7 @@ class RegressionNpzDataset:
         self.data_dir = os.path.join(regression_preprocessed, self.dataset_name)
         self.fingerprint_path = os.path.join(self.data_dir, self.target_shape_str, 'fingerprint.json')
         self.images_dir = os.path.join(self.data_dir, self.target_shape_str)
-        self.labels_dir = os.path.join(self.data_dir, "labelsTr")
+        self.score_file = os.path.join(self.data_dir, "score.csv")
         self.split_json_path = os.path.join(self.data_dir, "splits_final.json")
         self.fold = fold
         self.mode = mode
@@ -162,7 +171,11 @@ class RegressionNpzDataset:
         self.preprocess_fn = preprocess_fn
 
         assert os.path.isdir(self.images_dir), f"图像目录不存在: {self.images_dir}"
-        self.has_labels = os.path.isdir(self.labels_dir)
+        # 新增：查找csv标签文件
+
+        if isfile(self.score_file):
+            self.scores = self._load_scores_from_csv(self.score_file)
+
         if self.mode in ['train', 'val']:
             assert os.path.isfile(self.split_json_path), "训练/验证模式需split.json"
             self.identifiers = self._load_identifiers_from_split()
@@ -187,10 +200,25 @@ class RegressionNpzDataset:
             arr = self.preprocess_fn(arr, fingerprint['mean'], fingerprint['std'])
         return arr, {"shape": arr.shape}
 
+    def _load_scores_from_csv(self, csv_path) -> dict:
+        scores = {}
+        with open(csv_path, 'r', encoding='utf-8') as f:
+            reader = csv.reader(f)
+            header = next(reader)
+            for row in reader:
+                if len(row) < 2:
+                    continue
+                identifier, score = row[0].strip(), row[1].strip()
+                try:
+                    scores[identifier] = float(score)
+                except ValueError:
+                    continue
+        return scores
+
     def _load_label(self, identifier: str) -> Optional[float]:
-        label_path = os.path.join(self.labels_dir, f"{identifier}.txt")
-        if os.path.isfile(label_path):
-            return self.load_txt(label_path)/108.0
+        # 优先查csv标签
+        if self.scores is not None and identifier in self.scores:
+            return self.scores[identifier] / 108.0
         return None
 
     def __getitem__(self, index: int) -> dict:
@@ -206,16 +234,6 @@ class RegressionNpzDataset:
     def __len__(self) -> int:
         return len(self.identifiers)
 
-    def get_case(self, identifier: str) -> dict:
-        if identifier not in self.identifiers:
-            raise ValueError(f"标识符不在当前数据集: {identifier}")
-        return self.__getitem__(self.identifiers.index(identifier))
-
-    @staticmethod
-    def load_txt(txt_path):
-        with open(txt_path, 'r') as f:
-            return float(f.read().strip())
-
     @staticmethod
     def load_json(json_path):
         with open(json_path, 'r') as f:
@@ -226,19 +244,10 @@ class RegressionNpzDataset:
 
 if __name__ == "__main__":
     # 测试RegressionNpzDataset
-    npz_dataset = RegressionNpzDataset(
-        dataset_id=140,
-        target_shape=(16, 648, 256),
-        fold=0,
-        mode='train'
-    )
-    dataloader = DataLoader(npz_dataset, batch_size=2, shuffle=True)
-    for batch in dataloader:
-        print(batch["image"].shape)
-        break
-    # print(f"NPZ样本数量: {len(npz_dataset)}")
-    # npz_sample = npz_dataset[0]
-    # print(f"NPZ样本标识符: {npz_sample['identifier']}")
-    # print(f"NPZ图像形状: {npz_sample['image'].shape}")
-    # if 'label' in npz_sample:
-    #     print(f"NPZ标签: {npz_sample['label']}")
+    dataset = RegressionNpzDataset(dataset_id=140, target_shape=(16, 648, 256), fold=0, mode='train')
+    print(f"样本数量: {len(dataset)}")
+    sample = dataset[0]
+    print(f"第一个样本标识符: {sample['identifier']}")
+    print(f"图像形状: {sample['image'].shape}")
+    if 'label' in sample:
+        print(f"标签: {sample['label']}")
